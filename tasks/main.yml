@@ -1,0 +1,154 @@
+---
+# tasks file for xen-cloudinit
+  - name: "Destroy {{ xen_cloudinit_hostname }}"
+    vars:
+      ansible_become: no
+    local_action:
+      module: community.general.xenserver_guest
+      name: "{{ xen_cloudinit_name_prefix }}{{ xen_cloudinit_hostname }}"
+      hostname: "{{ xen_cluster_host }}"
+      username: "{{ xen_username }}"
+      password: "{{ xen_password }}"
+      state: absent
+      force: yes
+    when: xen_cloudinit_recreate_vm
+
+  - name: Set VM disk size value.
+    set_fact:
+      xen_cloudinit_primary_disk: "{'size_{{ xen_cloudinit_boot_disk_size[\"unit\"] }}': '{{ xen_cloudinit_boot_disk_size['size'] }}', 'sr': '{{ xen_cloudinit_sr }}' }"
+
+  - name: "Create {{ xen_cloudinit_hostname }}"
+    vars:
+      ansible_become: no
+    local_action:
+      module: community.general.xenserver_guest
+      name: "{{ xen_cloudinit_name_prefix }}{{ xen_cloudinit_hostname }}"
+      hostname: "{{ xen_cluster_host }}"
+      username: "{{ xen_username }}"
+      password: "{{ xen_password }}"
+      template: "{{ xen_cloudinit_template }}"
+      hardware:
+        num_cpus: "{{ xen_cloudinit_cpus }}"
+        memory_mb: "{{ xen_cloudinit_ram_mb }}"
+      disks:
+        - "{{ xen_cloudinit_primary_disk }}"
+        - size_mb: "6"
+          sr: "{{ xen_cloudinit_sr }}"
+          name: "{{ deploy_environment }}-{{ xen_cloudinit_hostname }}-cloudinit"
+      networks: "{{ xen_cloudinit_networks }}"
+      linked_clone: yes
+    register: vm
+
+  - name: "Check {{ xen_cloudinit_hostname }} state"
+    local_action:
+      module: community.general.xenserver_guest_powerstate
+      name: "{{ xen_cloudinit_name_prefix }}{{ xen_cloudinit_hostname }}"
+      hostname: "{{ xen_cluster_host }}"
+      username: "{{ xen_username }}"
+      password: "{{ xen_password }}"
+      state: present
+    register: power_state
+
+  - name: "Configure {{ xen_cloudinit_hostname }} VM"
+    vars:
+      ansible_become: no
+    when: power_state['instance']['state'] == 'poweredoff'
+    block:
+      - name: Extra roles
+        include_role:
+          name: "{{ item }}"
+        loop: "{{ xen_cloudinit_extra_roles }}"
+
+      - name: Write template files.
+        block:
+          - name: Ensure cloudinit config directory exists.
+            local_action:
+              module: file
+              dest: "{{ xen_cloudinit_directory }}/{{ xen_cloudinit_hostname }}"
+              state: directory
+              recurse: yes
+    
+          - name: Metadata template
+            local_action:
+              module: template
+              src: meta-data.j2
+              dest: "{{ xen_cloudinit_directory }}/{{ xen_cloudinit_hostname }}/meta-data"
+            register: metadata_template
+    
+          - name: User template
+            local_action:
+              module: template
+              src: user-data.j2
+              dest: "{{ xen_cloudinit_directory }}/{{ xen_cloudinit_hostname }}/user-data"
+            register: user_template
+
+          # Manually make sure interfaces aren't already configured in /etc/network/interfaces!
+          - name: Network template
+            local_action:
+              module: template
+              src: network-config.j2
+              dest: "{{ xen_cloudinit_directory }}/{{ xen_cloudinit_hostname }}/network-config"
+            when: xen_cloudinit_network_interfaces is defined
+            register: network_template
+    
+          - name: Delete network template
+            local_action:
+              module: file
+              dest: "{{ xen_cloudinit_directory }}/{{ xen_cloudinit_hostname }}/network-config"
+              state: absent
+            when: xen_cloudinit_network_interfaces is not defined
+            register: network_template_removed
+
+
+      - name: Emplace cloudinit image
+        when: metadata_template.changed or user_template.changed or (network_template.changed or network_template_removed.changed) or vm.changed
+        block:
+         - name: Ensure cloudinit image directory exists.
+           local_action:
+             module: file
+             dest: "{{ xen_cloudinit_images_directory }}/{{ xen_cloudinit_hostname }}"
+             state: directory
+             recurse: yes
+   
+         - name: Generate disk image
+           local_action:
+             module: shell
+             cmd: "python3 -m nocloud -d {{ xen_cloudinit_directory }}/{{ xen_cloudinit_hostname }} -o {{ xen_cloudinit_images_directory }}/{{ xen_cloudinit_hostname }}/cloudinit.vhd -t vhd"
+   
+         - name: Upload CloudInit image.
+           delegate_to: "{{ xen_control_host }}"
+           copy:
+             src: "{{ xen_cloudinit_images_directory }}/{{ xen_cloudinit_hostname }}/cloudinit.vhd"
+             dest: "{{ deploy_environment }}-{{ xen_cloudinit_hostname }}-img.vhd"
+
+         - name: Mount CloudInit disk.
+           delegate_to: "{{ xen_control_host }}"
+           shell:
+             cmd: |
+               xe vdi-import filename={{ deploy_environment }}-{{ xen_cloudinit_hostname }}-img.vhd format=vhd uuid=$(xe vdi-list name-label="{{ deploy_environment }}-{{ xen_cloudinit_hostname }}-cloudinit" params=uuid | cut -b 17-); rm {{ deploy_environment }}-{{ xen_cloudinit_hostname }}-img.vhd
+
+  - name: "Start {{ xen_cloudinit_hostname }}"
+    vars:
+      ansible_become: no
+    local_action:
+      module: community.general.xenserver_guest
+      name: "{{ xen_cloudinit_name_prefix }}{{ xen_cloudinit_hostname }}"
+      hostname: "{{ xen_cluster_host }}"
+      username: "{{ xen_username }}"
+      password: "{{ xen_password }}"
+      state: poweredon
+      wait_for_ip_address: yes
+    register: poweron
+
+  - name: "Wait for ssh on {{ xen_cloudinit_hostname }}"
+    vars:
+      ansible_become: false
+    local_action:
+      module: shell
+      cmd: "host {{ inventory_hostname }}"
+    retries: "{{ xen_cloudinit_retries }}"
+    delay: 5
+    ignore_errors: yes
+    register: result
+    until: result.rc == 0
+    when: poweron.changed

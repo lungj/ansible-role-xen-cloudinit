@@ -1,0 +1,60 @@
+Content-Type: multipart/mixed; boundary="MIMEBOUNDARY"
+MIME-Version: 1.0
+
+--MIMEBOUNDARY
+Content-Transfer-Encoding: 7bit
+Content-Type: text/cloud-config
+Mime-Version: 1.0
+
+#cloud-config
+merge_how:
+ - name: list
+   settings: [append]
+ - name: dict
+   settings: [no_replace, recurse_list]
+
+apt:
+{% if xen_cloudinit_preserve_apt %}
+  preserve_sources_list: true
+{% endif %}
+{% if xen_cloudinit_apt_mirror is defined and xen_cloudinit_apt_mirror != "" %}
+  primary:
+    - arches: [default]
+      uri: {{ xen_cloudinit_apt_mirror }}
+{% endif %}
+{% if xen_cloudinit_apt_mirror_security is defined and xen_cloudinit_apt_mirror_security != "" %}
+  security:
+    - arches: [default]
+      uri: {{ xen_cloudinit_apt_mirror_security }}
+{% endif %}
+
+bootcmd:
+{% for host_info in xen_cloudinit_hosts %}{% set host_split = host_info.split(' ') %}
+  - cloud-init-per once proxy_host_docker-{{ host_split[1] }} echo '{{ host_info }}' >> /etc/cloud/templates/hosts.debian.tmpl
+{% endfor %}
+
+hostname: {{ xen_cloudinit_hostname }}
+manage_etc_hosts: yes
+
+users:
+  - name: {{ xen_cloudinit_username }}
+    lock_passwd: True
+    gecos: {{ xen_cloudinit_username }}
+    groups: [adm, audio, cdrom, dialout, floppy, video, plugdev, dip, netdev]
+    sudo: ALL=(ALL) NOPASSWD:ALL
+
+--MIMEBOUNDARY
+{% for user_datum in xen_cloudinit_user_data %}
+Content-Transfer-Encoding: 7bit
+Content-Type: text/cloud-config
+Mime-Version: 1.0
+
+merge_how:
+ - name: list
+   settings: [append]
+ - name: dict
+   settings: [no_replace, recurse_list]
+#cloud-config
+{{ user_datum }}
+--MIMEBOUNDARY
+{% endfor %}

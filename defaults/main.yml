@@ -1,0 +1,60 @@
+---
+# defaults file for xen-cloudinit
+
+deploy_environment: "dev"
+
+# VM CloudInit config directories.
+### Local directory for storing cloud init contents.
+xen_cloudinit_directory: "output/{{ deploy_environment }}/xen_cloudinit"
+
+### Local directory for storing built Xen images.
+xen_cloudinit_images_directory: "output/{{ deploy_environment }}/xen_images"
+
+###
+xen_cloudinit_name_prefix: "{{ deploy_environment }} "
+
+
+### Xen API endpoint. Default assumes a reverse SSH tunnel to localhost port 6781.
+xen_cluster_host: "http://localhost:6781"
+
+# Xen credentials.
+### Username used to log in to xen cluster. 
+xen_username: root
+
+### Password used to log in to xen cluster. Use a vault or keyring for this!
+xen_password: ""
+
+
+# Set to true to destroy and recreate an existing VM.
+xen_cloudinit_recreate_vm: no
+
+# VM resources
+### Configure size of boot drive.
+xen_cloudinit_boot_disk_size:
+  unit: gb
+  size: 3
+
+### Number of VCPUs to allocate to VM.
+xen_cloudinit_cpus: 1
+
+### Amount of RAM to provide VM.
+xen_cloudinit_ram_mb: 2048
+
+# CloudInit configuration
+### Default username of CloudInit to reconfigure.
+xen_cloudinit_username: root
+
+### Whether or not to preserve apt sources.
+xen_cloudinit_preserve_apt: no
+
+### List of lines of data to add to user-data.
+xen_cloudinit_user_data: []
+
+### Additional xen-cloudinit plug-in roles to load.
+xen_cloudinit_extra_roles: []
+
+### VM hostname.
+xen_cloudinit_hostname: "{{ inventory_hostname.split('.')[0] }}"
+
+### Number of times to try to connect to the VM after it boots up.
+xen_cloudinit_retries: 36
